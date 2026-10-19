@@ -27,6 +27,8 @@ go.work.sum
 
 # Binary
 /vpn
+/vpn-client
+/vpn-server
 
 # env file
 .env
