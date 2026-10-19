@@ -1,74 +1,59 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"syscall"
+	"time"
 
-	"golang.zx2c4.com/wireguard/wgctrl"
-
-	"github.com/vishvananda/netlink"
-)
-
-const (
-	configDir  = "/etc/vpn"
-	configPath = "/etc/vpn/config.json"
+	"github.com/tmeador/vpn/internal/shared"
+	"github.com/tmeador/vpn/internal/wg"
 )
 
 func main() {
-	attrs := netlink.NewLinkAttrs()
-	attrs.Name = "wg0"
+	WG_ADDR := shared.MustEnv("WG_ADDR")
+	SERVER_URL := shared.MustEnv("SERVER_URL")
 
-	link := &netlink.GenericLink{
-		LinkAttrs: attrs,
-		LinkType:  "wireguard",
+	cfg, err := wg.LoadOrCreateConfig()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 
-	if err := netlink.LinkAdd(link); err != nil {
-		if errors.Is(err, syscall.EEXIST) {
-			fmt.Println("Interface already exists.")
-		} else {
-			fmt.Printf("failed to create wireguard interface: %v\n", err)
-			return
-		}
+	newPeers, err := registerWithServer(SERVER_URL, cfg.PublicKey, WG_ADDR)
+	if err != nil {
+		fmt.Printf("control plane unreachable, using cached peers: %v\n", err)
 	} else {
-		fmt.Println("WireGuard interface wg0 created successfully.")
+		cfg.Peers = newPeers
+		if err = cfg.WriteConfig(); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
 	}
 
-	WG_ADDR := os.Getenv("WG_ADDR")
-	addr, err := netlink.ParseAddr(WG_ADDR)
-	if err != nil {
+	if err = wg.CreateAndConfigureInterface(*cfg, WG_ADDR); err != nil {
 		fmt.Println(err)
-		return
-	}
-	if err = netlink.AddrAdd(link, addr); err != nil {
-		fmt.Println(err)
-	}
-	fmt.Printf("assigned wg0 ip address %s\n", WG_ADDR)
-
-	if err = netlink.LinkSetUp(link); err != nil {
-		fmt.Println(err)
-		return
-	}
-	fmt.Println("interface up")
-
-	client, err := wgctrl.New()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer client.Close()
-
-	cfg, err := loadOrCreateConfig()
-	if err != nil {
-		fmt.Printf("config error: %v\n", err)
-		return
+		os.Exit(1)
 	}
 
-	if err = client.ConfigureDevice("wg0", *cfg); err != nil {
-		fmt.Printf("failed to configure device: %v\n", err)
-		return
+	fmt.Println("polling for peer updates every 30s")
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		newPeers, err := registerWithServer(SERVER_URL, cfg.PublicKey, WG_ADDR)
+		if err != nil {
+			fmt.Printf("poll failed: %v\n", err)
+			continue
+		}
+
+		cfg.Peers = newPeers
+		if err = cfg.WriteConfig(); err != nil {
+			fmt.Printf("failed to write config: %v\n", err)
+			continue
+		}
+
+		if err = wg.ReconfigurePeers(*cfg); err != nil {
+			fmt.Printf("failed to reconfigure peers: %v\n", err)
+		}
 	}
-	fmt.Println("wireguard configured")
 }

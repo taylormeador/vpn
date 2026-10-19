@@ -7,14 +7,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tmeador/vpn/internal/types"
+	"github.com/tmeador/vpn/internal/wg"
 )
 
-func registerWithServer(serverURL, pubkey, endpoint string) ([]types.PeerEntry, error) {
+func registerWithServer(serverURL, pubkey, meshIP string) ([]wg.PeerEntry, error) {
 	payload := map[string]string{
-		"token":    "token-123",
-		"pubkey":   pubkey,
-		"endpoint": endpoint,
+		"token":   "token-123",
+		"pubkey":  pubkey,
+		"mesh_ip": meshIP,
 	}
 
 	jsonData, err := json.Marshal(payload)
@@ -39,7 +39,7 @@ func registerWithServer(serverURL, pubkey, endpoint string) ([]types.PeerEntry, 
 		return nil, fmt.Errorf("control plane returned %d", resp.StatusCode)
 	}
 
-	var peers []types.PeerEntry
+	var peers []wg.PeerEntry
 	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
 		return nil, fmt.Errorf("parsing peer list: %w", err)
 	}
